@@ -1,28 +1,17 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
 
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import r2_score
 from sklearn.metrics.pairwise import cosine_similarity
 
 st.set_page_config(page_title="Tourism Experience Analytics", layout="wide")
-
-
-# ============================================================
-# IMPORTANT: This function MUST exist for your deploy model to load.
-# Your visitmode_model_deploy.pkl was saved with a FunctionTransformer
-# that references cat_to_text from __main__.
-# In Streamlit, __main__ is this file. So define it here.
-# ============================================================
-def cat_to_text(df):
-    cat_cols = ["VisitSeason", "UserContinentName", "AttractionTypeName"]
-    return (df[cat_cols].astype(str).fillna("NA").agg(" ".join, axis=1)).values
 
 
 # -------------------------
@@ -36,26 +25,7 @@ def load_df():
 
 
 # -------------------------
-# Load only deployable classification model
-# -------------------------
-class CatToText:
-    def __call__(self, df):
-        cat_cols = ["VisitSeason", "UserContinentName", "AttractionTypeName"]
-        return (
-            df[cat_cols]
-            .astype(str)
-            .fillna("NA")
-            .agg(" ".join, axis=1)
-            .values
-        )
-    
-@st.cache_resource
-def load_clf():
-    return joblib.load("visitmode_model_deploy.pkl")
-
-
-# -------------------------
-# Train regression inside app (avoids pickle compatibility issues)
+# Train regression inside app
 # -------------------------
 @st.cache_resource
 def train_regression(df: pd.DataFrame):
@@ -68,7 +38,7 @@ def train_regression(df: pd.DataFrame):
 
     missing = [c for c in features + [target] if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing required columns in tourism_merged.csv: {missing}")
+        raise ValueError(f"Missing required columns: {missing}")
 
     data = df[features + [target]].dropna().copy()
     X = data[features]
@@ -95,6 +65,53 @@ def train_regression(df: pd.DataFrame):
 
 
 # -------------------------
+# Train classification inside app (replaces joblib .pkl)
+# -------------------------
+@st.cache_resource
+def train_classifier(df: pd.DataFrame):
+    features = [
+        "VisitYear", "VisitMonth", "VisitQuarter", "VisitSeason",
+        "UserContinentName", "AttractionTypeName",
+        "user_avg_rating", "user_rating_count",
+        "attraction_avg_rating", "attraction_rating_count"
+    ]
+    target = "VisitModeName"
+
+    missing = [c for c in features + [target] if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required classification columns: {missing}")
+
+    data = df[features + [target]].dropna().copy()
+    X = data[features]
+    y = data[target].astype(str)
+
+    cat_cols = ["VisitSeason", "UserContinentName", "AttractionTypeName"]
+    num_cols = [
+        "VisitYear", "VisitMonth", "VisitQuarter",
+        "user_avg_rating", "user_rating_count",
+        "attraction_avg_rating", "attraction_rating_count"
+    ]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    pre = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+        ("num", "passthrough", num_cols),
+    ])
+
+    clf = HistGradientBoostingClassifier(random_state=42)
+
+    pipe = Pipeline([("preprocess", pre), ("model", clf)])
+    pipe.fit(X_train, y_train)
+
+    # optional: quick metric in logs
+    acc = pipe.score(X_test, y_test)
+    return pipe, acc
+
+
+# -------------------------
 # Recommender (collab + popular)
 # -------------------------
 @st.cache_resource
@@ -102,7 +119,7 @@ def build_recommender(df: pd.DataFrame):
     required = ["UserId", "AttractionId", "Rating", "AttractionTypeName", "Attraction", "AttractionCityId"]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing required recommender columns in tourism_merged.csv: {missing}")
+        raise ValueError(f"Missing required recommender columns: {missing}")
 
     rec = df[required].dropna().copy()
     rec = rec.groupby(["UserId", "AttractionId"], as_index=False).agg({
@@ -119,9 +136,6 @@ def build_recommender(df: pd.DataFrame):
         else:
             tr, _ = train_test_split(g, test_size=0.2, random_state=42)
             train_rows.append(tr)
-
-    if not train_rows:
-        raise ValueError("No training rows available for recommender after preprocessing.")
 
     train_df = pd.concat(train_rows, ignore_index=True)
 
@@ -189,43 +203,36 @@ st.title("Tourism Experience Analytics")
 
 df = load_df()
 
-# Load classification model
-try:
-    clf_model = load_clf()
-except FileNotFoundError:
-    st.error("visitmode_model_deploy.pkl not found in the project folder.")
-    st.stop()
-except Exception as e:
-    st.error("Failed to load visitmode_model_deploy.pkl. (Often due to missing cat_to_text)")
-    st.code(str(e))
-    st.stop()
-
-# Train regression model inside app
+# Train models in-app
 try:
     reg_model, reg_r2 = train_regression(df)
 except Exception as e:
-    st.error("Regression training failed. Check your dataset columns.")
+    st.error("Regression training failed.")
     st.code(str(e))
     st.stop()
 
-# Build recommender
+try:
+    clf_model, clf_acc = train_classifier(df)
+except Exception as e:
+    st.error("Classification training failed.")
+    st.code(str(e))
+    st.stop()
+
 try:
     user_item, sim_df, meta, pop = build_recommender(df)
 except Exception as e:
-    st.error("Recommender build failed. Check your dataset columns.")
+    st.error("Recommender build failed.")
     st.code(str(e))
     st.stop()
 
-st.caption(f"Regression trained in-app (R² ≈ {reg_r2:.3f}). Classification loaded from deploy model.")
+st.caption(f"Regression (in-app) R² ≈ {reg_r2:.3f} | Classification (in-app) Acc ≈ {clf_acc:.3f}")
 
 # Sidebar inputs
 st.sidebar.header("Inputs")
 
 min_uid = int(df["UserId"].min())
 max_uid = int(df["UserId"].max())
-default_uid = min_uid
-
-user_id = st.sidebar.number_input("UserId", min_value=min_uid, max_value=max_uid, value=default_uid, step=1)
+user_id = st.sidebar.number_input("UserId", min_value=min_uid, max_value=max_uid, value=min_uid, step=1)
 
 visit_year_options = sorted(df["VisitYear"].dropna().unique().tolist())
 visit_year = st.sidebar.selectbox("VisitYear", visit_year_options, index=0)
@@ -264,7 +271,7 @@ X_reg = pd.DataFrame([{
     "AttractionTypeName": str(attr_type),
 }])
 
-# Classification deploy input (10 columns)
+# Classification input feature creation
 u_stats = df.loc[df["UserId"] == user_id, "Rating"]
 user_avg = float(u_stats.mean()) if len(u_stats) else float(df["Rating"].mean())
 user_cnt = float(u_stats.count()) if len(u_stats) else 0.0
@@ -290,19 +297,11 @@ c1, c2, c3 = st.columns(3)
 
 with c1:
     st.subheader("Predicted Visit Mode")
-    try:
-        st.success(clf_model.predict(X_clf)[0])
-    except Exception as e:
-        st.error("Classification prediction failed.")
-        st.code(str(e))
+    st.success(clf_model.predict(X_clf)[0])
 
 with c2:
     st.subheader("Predicted Rating")
-    try:
-        st.info(f"{float(reg_model.predict(X_reg)[0]):.2f} / 5")
-    except Exception as e:
-        st.error("Regression prediction failed.")
-        st.code(str(e))
+    st.info(f"{float(reg_model.predict(X_reg)[0]):.2f} / 5")
 
 with c3:
     st.subheader("Recommendations")
@@ -313,8 +312,8 @@ with c3:
     else:
         st.dataframe(recs, use_container_width=True)
 
-with st.expander("Debug: Inputs sent to models"):
-    st.write("X_clf (classification input):")
+with st.expander("Debug: Inputs"):
+    st.write("X_clf")
     st.dataframe(X_clf)
-    st.write("X_reg (regression input):")
+    st.write("X_reg")
     st.dataframe(X_reg)
