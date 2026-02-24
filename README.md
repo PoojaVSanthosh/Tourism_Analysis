@@ -39,7 +39,7 @@ Total records:
 
 1,698 attractions
 
-🧹 Data Preparation
+# Data Preparation
 Cleaning
 
 Removed duplicates
@@ -78,7 +78,7 @@ User–Item interaction matrix
 
 Cosine similarity matrix
 
-📊 Exploratory Data Analysis
+# Exploratory Data Analysis
 
 Key Insights:
 
@@ -125,7 +125,7 @@ user_rating_count
 
 Insight: User behavioral consistency is the strongest predictor of satisfaction.
 
-🧭 Classification: Visit Mode Prediction
+# Classification: Visit Mode Prediction
 
 Visit Mode Categories:
 
@@ -156,7 +156,7 @@ Baseline random guess ≈ 20%
 
 50% accuracy is strong behavioral performance
 
-🎯 Recommendation System
+* Recommendation System *
 Approach
 
 Collaborative Filtering
@@ -175,5 +175,10 @@ Hybrid Model
 Hybrid Precision@10 = 0.1366
 No significant improvement over collaborative.
 
-Final choice:
-✅ Collaborative Filtering (simpler & stable)
+# Business Impact
+
+✔ Enables targeted marketing campaigns
+✔ Improves user satisfaction prediction
+✔ Identifies tourism hotspots
+✔ Enhances personalization
+✔ Supports customer retention strategies
